@@ -16,8 +16,8 @@ def run_cmd(cmd):
         print "Run [%s] Failed!"%cmd;
         print "Reason: [%s]" %res[1];
     else:
-        print "--------->>Run [%s] Success!"%cmd;
-
+        # print "--------->>Run [%s] Success!"%cmd;
+        pass;
     return res;
 
 class osd:
