@@ -42,7 +42,6 @@ class host:
         self.per_use = per_use;
         self.osd_list = [];
 
-
     def add_osd(self, osd):
         self.osd_list.append(osd);
 
@@ -84,10 +83,8 @@ class cluster:
                         _osd = osd(id, weight, size, used, per_use, cur_host.host_name);
                         self.host[cur_host.host_name].add_osd(_osd);
                         self.osd_list.append([name, weight, size, used, per_use, cur_host.host_name]);
-
             except:
                 continue;
-
 
     def __get_ceph_version(self):
         res = run_cmd("ceph -v");
