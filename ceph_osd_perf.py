@@ -103,9 +103,9 @@ class cluster:
             # print gapline.format("---");
 
 def close_curse(c):
-	c.keypad(0);
-	curses.echo();
-	curses.endwin();
+    c.keypad(0);
+    curses.echo();
+    curses.endwin();
 
 			
 if __name__ == "__main__":
@@ -132,7 +132,7 @@ if __name__ == "__main__":
         fh = open(__LOG__, 'a+');
     except Exception as e:
         print str(e);
-		close_curse(stdscr);
+	close_curse(stdscr);
         exit(-1);
 
     #-- err info
@@ -161,7 +161,7 @@ if __name__ == "__main__":
         err = str(e);
     finally:
         fh.close();
-		close_curse(stdscr);
+	close_curse(stdscr);
 		
     # print last res
     if len(err) == 0:
