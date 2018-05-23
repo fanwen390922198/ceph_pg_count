@@ -6,10 +6,20 @@
 	创建日期: 2018/5/15
 	代码编写: fanwen
 	功能说明:
+	    本程序会动态的，间隔性的将osd perf打印到屏幕，并写到日志文件中
 '''
 
 import commands
 import time
+import sys
+import getopt
+import curses
+
+__RUN_TIME__ = 30    # 默认运行200s
+__SHOW_LINES__ = 20   # 默认显示20行, 经试验1curses最多能显示20多条数据，故此处写死，只显示前20;
+__FRESH_GAP__ = 3;    # 刷新频率
+__LOG__ = './ceph_osd_perf.log'   # 日志文件
+
 
 def run_cmd(cmd):
     res = commands.getstatusoutput(cmd);
@@ -23,13 +33,12 @@ def run_cmd(cmd):
 
 class cluster:
     def __init__(self):
-        self.osd_list = [];
+        self.osd_perf_list = [];
         self.osd_2_host = {};
         self.__get_osd_tree();
 
     def get_osd_perf(self):
-        # self.__get_osd_tree();
-
+        self.osd_perf_list = [];
         res = run_cmd("ceph osd perf");
         if res[0] <> 0:
             print "get ceph -v failed!";
@@ -39,13 +48,11 @@ class cluster:
         for line in ceph_perf_list:
             try:
                 info = line.split();
-                # print info;
                 id = eval(info[0]);
                 fs_commit_latency = info[1];
                 fs_apply_latency = info[2];
                 host_name = self.osd_2_host[id];
-                self.osd_list.append([info[0], fs_commit_latency, fs_apply_latency, host_name]);
-                # print self.osd_list;
+                self.osd_perf_list.append([info[0], fs_commit_latency, fs_apply_latency, host_name]);
             except Exception as e:
                 print e;
                 continue;
@@ -57,9 +64,9 @@ class cluster:
             return False;
         ceph_osd_str = res[1];
 
-        ceph_osd_list = ceph_osd_str.split('\n')[0:];
+        ceph_osd_perf_list = ceph_osd_str.split('\n')[0:];
         cur_host = None;    # 当前host
-        for line in ceph_osd_list:
+        for line in ceph_osd_perf_list:
             try:
                 info = line.split();
                 id = eval(info[0]);
@@ -77,29 +84,82 @@ class cluster:
 
     def show_ceph_osd_perf(self):
         mat = ["{0[0]:8}","{0[1]:24}","{0[2]:24}","{0[3]:12}"];
-        gap_line_width = 24 + 24 + 12 + 8;
-        headlinde = ["osd","fs_commit_latency(ms)", "fs_apply_latency(ms)","hostname"];
+        # gap_line_width = 24 + 24 + 12 + 8;
+        headlinde = ["osd","fs_commit_latency(ms)", "fs_apply_latency(ms)","host_name"];
 
-        all_info = "";
+        all_info = [];
         ss = "".join(mat);
-        # print ss.format(headlinde);
-        all_info += ss.format(headlinde);
-        all_info += "\n";
-        gapline = '{:->%d}'%gap_line_width;
+        all_info.append(ss.format(headlinde));
+
+        # gapline = '{:->%d}'%gap_line_width;
         # print gapline.format("---");
 
-        ll = sorted(self.osd_list, key=lambda x:eval(x[2]), reverse = True);
-        for l in ll[0:20]:
-            # print ss.format(l);
-            all_info += ss.format(l);
-            all_info += "\n";
+        ll = sorted(self.osd_perf_list, key = lambda x:eval(x[2]), reverse = True);
+        for l in ll[0:__SHOW_LINES__]:
+            all_info.append(ss.format(l));
 
         return all_info;
             # print gapline.format("---");
 
 if __name__ == "__main__":
+    run_time = __RUN_TIME__;
+    show_line = __SHOW_LINES__;
+
+    opts, args = getopt.getopt(sys.argv[1:], "T:S:", []);
+    for opt in opts:
+        if opt[0] == '-T':
+            run_time = eval(opt[1]) if len(opt[1]) > 0  else __RUN_TIME__;
+        elif opt[0] == '-S':
+            show_line = eval(opt[1]) if len(opt[1]) > 0  else __SHOW_LINES__;
+
     cs = cluster();
-    cs.get_osd_perf();
-    print cs.show_ceph_osd_perf();
+    try:
+        stdscr = curses.initscr();
+        # curses.init_pair(2, curses.COLOR_RED, curses.COLOR_BLACK)
+        curses.noecho();
+    except Exception as e:
+        print str(e);
+        exit(-1);
 
+    try:
+        fh = open(__LOG__, 'a+');
+    except Exception as e:
+        print str(e);
+        exit(-1);
 
+    #-- err info
+    err = "";
+
+    try:
+        while(run_time > 0):
+            cs.get_osd_perf();
+
+            stdscr.clear();
+            stdscr.addstr(0, 0, "---->[ceph osd perf] will run %d sec, show top %d latency."%(run_time, show_line));
+            fh.write("-------------------------------------------------------------------------------------------\n");
+            fh.write(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()) + '\n');
+
+            line = 1;
+            all_info = cs.show_ceph_osd_perf();
+            for info in all_info:
+                stdscr.addstr(line, 0, info);
+                fh.write(info + '\n');
+                line += 1;
+
+            stdscr.refresh();
+            time.sleep(__FRESH_GAP__);
+            run_time -= __FRESH_GAP__;
+    except Exception as e:
+        err = str(e);
+    finally:
+        fh.close();
+        stdscr.keypad(0);
+        curses.echo();
+        curses.endwin();
+
+    # print last res
+    if len(err) == 0:
+        for info in all_info:
+            print info;
+    else:
+        print err;
