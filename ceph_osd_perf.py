@@ -20,10 +20,10 @@ try:
 except ImportError:
     import queue
 
-__RUN_TIME__ = 30    # 默认运行200s
-__SHOW_LINES__ = 20   # 默认显示20行, 一屏幕究竟能打印多少条数据，跟分辨率，字体大小有关，其实也可以用scroll刷出滚动条来解决，
+__RUN_TIME__ = 120    # 默认运行200s
+__SHOW_LINES__ = 22   # 默认显示20行, 一屏幕究竟能打印多少条数据，跟分辨率，字体大小有关，其实也可以用scroll刷出滚动条来解决，
 					  # 但个人觉得没必要，若屏幕能多打印数据，请自行调整数量，或者自己增加代码刷滚动条。
-__FRESH_GAP__ = 3;    # 刷新频率
+__FRESH_GAP__ = 2;    # 刷新频率
 __LOG__ = './ceph_osd_perf.log'   # 日志文件
 
 __HIGH_LATENCY_LINE__ = 20; # 超过20 ms就算高延时
@@ -86,6 +86,7 @@ class perf_count_thread(threading.Thread):
         self.queue = th_queue;  # 线程同步队列
         self._exit = exit;
         self.cluster = cluster;
+        self.start_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime());
 
     def run(self):
         while not self._exit.get():
@@ -118,11 +119,20 @@ class perf_count_thread(threading.Thread):
         ss = "".join(mat);
 
         fh = open(__LOG__, 'a+');
-        fh.write("-------------------------------------------------------------------------------------------\n");
+        fh.write("-------------------------------------------------------------------------------------------------\n");
+        fh.write("script run start at: %s\n"%self.start_time);
         fh.write(ss.format(headlinde) + "\n");
 
         ll = sorted(count_res, key = lambda x:(x[8], eval(x[1])), reverse = True);
+        if len(ll) > 0:
+            pre_node = "";
+            cur_node = ll[0][8];
         for l in ll:
+            pre_node = cur_node;
+            cur_node = l[8];
+            if cur_node <> pre_node:
+                fh.write(
+                    "-------------------------------------------------------------------------------------------------\n");
             fh.write(ss.format(l) + "\n");
 
         fh.close();
