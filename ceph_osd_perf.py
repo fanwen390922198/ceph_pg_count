@@ -14,11 +14,21 @@ import time
 import sys
 import getopt
 import curses
+import threading
+try:
+    import Queue as queue
+except ImportError:
+    import queue
 
-__RUN_TIME__ = 30    # 默认运行200s
+
+
+__RUN_TIME__ = 300    # 默认运行200s
 __SHOW_LINES__ = 20   # 默认显示20行, 经试验1curses最多能显示20多条数据，故此处写死，只显示前20;
-__FRESH_GAP__ = 3;    # 刷新频率
+__FRESH_GAP__ = 2;    # 刷新频率
 __LOG__ = './ceph_osd_perf.log'   # 日志文件
+
+__HIGH_LATENCY_LINE__ = 20; # 超过20 ms就算高延时
+
 
 
 def run_cmd(cmd):
@@ -31,11 +41,104 @@ def run_cmd(cmd):
         pass;
     return res;
 
+
+#-- 多线程同步
+class CMyLockData:
+    def __init__(self, data):
+        self.d = data;
+        self.mutex = threading.Lock();    # 创建互斥锁
+
+    def get(self):
+        self.mutex.acquire();
+        d = self.d;
+        self.mutex.release();
+        return d;
+
+    def set(self, data):
+        self.mutex.acquire();
+        self.d = data;
+        self.mutex.release();
+
+class osd_perf_count:
+    def __init__(self, osd_id, host_name):
+        self.id = osd_id;
+        self.host = host_name;
+        self.apply_latency = [];
+        self.commit_latency = [];
+
+    def add_latency(self, apply_latency, commit_latency):
+        self.apply_latency.append(apply_latency);
+        self.commit_latency.append(commit_latency);
+
+    def get_count(self):
+        counts = len(self.commit_latency);     # 出现commit时延的次数
+        com_max = max(self.commit_latency);
+        com_min = min(self.commit_latency);
+        com_ave = sum(self.commit_latency) / counts;
+        app_max = max(self.apply_latency);
+        app_min = min(self.apply_latency);
+        app_ave = sum(self.apply_latency) / counts;
+        return [str(self.id), str(counts), str(com_max), str(com_min), str(com_ave), str(app_max), str(app_min), str(app_ave), self.host];
+
+
+class perf_count_thread(threading.Thread):
+    def __init__(self, th_queue, exit, cluster):
+        super(perf_count_thread, self).__init__();
+        self.queue = th_queue;  # 线程同步队列
+        self._exit = exit;
+        self.cluster = cluster;
+
+    def run(self):
+        while not self._exit.get():
+            try:
+                osd_perf_entry = self.queue.get(timeout=1);
+                osd_id = osd_perf_entry[0];
+                commit_latency = osd_perf_entry[1];
+                apply_latency = osd_perf_entry[2];
+                self.count_perf(osd_id, apply_latency, commit_latency);
+            except:
+                continue;
+            # time.sleep(1);
+
+        self.show_perf_();
+
+    def count_perf(self, osd_id, app_lat, com_lat):
+        if not self.cluster.cluster_perf_count.has_key(osd_id):
+            self.cluster.cluster_perf_count[osd_id] = osd_perf_count(osd_id, self.cluster.osd_2_host[osd_id]);
+
+        self.cluster.cluster_perf_count[osd_id].add_latency(app_lat, com_lat);
+
+    def show_perf_(self):
+        count_res = [];
+        cluster_perf_count = self.cluster.cluster_perf_count;
+        for value in cluster_perf_count.values():
+            count_res.append(value.get_count());
+
+        mat = ["{0[0]:8}","{0[1]:8}","{0[2]:12}","{0[3]:12}","{0[4]:12}","{0[5]:12}","{0[6]:12}","{0[7]:12}","{0[8]:12}"];
+        headlinde = ["osd","count", "commit_max","commit_min","commit_avg", "apply_max","apply_min","apply_avg", "host_name"];
+        ss = "".join(mat);
+
+        fh = open(__LOG__, 'a+');
+        fh.write("-------------------------------------------------------------------------------------------\n");
+        fh.write(ss.format(headlinde) + "\n");
+
+        ll = sorted(count_res, key = lambda x:(x[8], eval(x[1])), reverse = True);
+        for l in ll:
+            fh.write(ss.format(l) + "\n");
+
+        fh.close();
+
 class cluster:
     def __init__(self):
         self.osd_perf_list = [];
         self.osd_2_host = {};
         self.__get_osd_tree();
+
+        self.cluster_perf_count = {} # id --> osd_perf_count
+        self.th_queue = queue.Queue(maxsize=10000);
+        self.pc_thread_exit = CMyLockData(False);
+        self.pc_th = perf_count_thread(self.th_queue, self.pc_thread_exit, self);
+        self.pc_th.start();
 
     def get_osd_perf(self):
         self.osd_perf_list = [];
@@ -52,7 +155,10 @@ class cluster:
                 fs_commit_latency = info[1];
                 fs_apply_latency = info[2];
                 host_name = self.osd_2_host[id];
-                self.osd_perf_list.append([info[0], fs_commit_latency, fs_apply_latency, host_name]);
+                if eval(fs_apply_latency) > __HIGH_LATENCY_LINE__:
+                    self.osd_perf_list.append([info[0], fs_commit_latency, fs_apply_latency, host_name]);
+                    self.th_queue.put([id, eval(fs_commit_latency), eval(fs_apply_latency)]);
+
             except Exception as e:
                 print e;
                 continue;
@@ -101,6 +207,15 @@ class cluster:
         return all_info;
             # print gapline.format("---");
 
+    def exit(self):
+        self.pc_thread_exit.set(True);
+        self.pc_th.join();
+
+def close_curse(c):
+    c.keypad(0);
+    curses.echo();
+    curses.endwin();
+
 if __name__ == "__main__":
     run_time = __RUN_TIME__;
     show_line = __SHOW_LINES__;
@@ -113,19 +228,23 @@ if __name__ == "__main__":
             show_line = eval(opt[1]) if len(opt[1]) > 0  else __SHOW_LINES__;
 
     cs = cluster();
+
     try:
         stdscr = curses.initscr();
         # curses.init_pair(2, curses.COLOR_RED, curses.COLOR_BLACK)
         curses.noecho();
     except Exception as e:
         print str(e);
+        cs.exit();
         exit(-1);
 
-    try:
-        fh = open(__LOG__, 'a+');
-    except Exception as e:
-        print str(e);
-        exit(-1);
+    # try:
+    #     fh = open(__LOG__, 'a+');
+    # except Exception as e:
+    #     print str(e);
+    #     close_curse(stdscr);
+    #     cs.exit();
+    #     exit(-1);
 
     #-- err info
     err = "";
@@ -136,14 +255,14 @@ if __name__ == "__main__":
 
             stdscr.clear();
             stdscr.addstr(0, 0, "---->[ceph osd perf] will run %d sec, show top %d latency."%(run_time, show_line));
-            fh.write("-------------------------------------------------------------------------------------------\n");
-            fh.write(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()) + '\n');
+            # fh.write("-------------------------------------------------------------------------------------------\n");
+            # fh.write(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()) + '\n');
 
             line = 1;
             all_info = cs.show_ceph_osd_perf();
             for info in all_info:
                 stdscr.addstr(line, 0, info);
-                fh.write(info + '\n');
+                # fh.write(info + '\n');
                 line += 1;
 
             stdscr.refresh();
@@ -152,10 +271,8 @@ if __name__ == "__main__":
     except Exception as e:
         err = str(e);
     finally:
-        fh.close();
-        stdscr.keypad(0);
-        curses.echo();
-        curses.endwin();
+        # fh.close();
+        close_curse(stdscr);
 
     # print last res
     if len(err) == 0:
@@ -163,3 +280,6 @@ if __name__ == "__main__":
             print info;
     else:
         print err;
+
+    cs.exit();
+
