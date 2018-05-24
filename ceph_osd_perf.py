@@ -20,11 +20,10 @@ try:
 except ImportError:
     import queue
 
-
-
-__RUN_TIME__ = 300    # 默认运行200s
-__SHOW_LINES__ = 20   # 默认显示20行, 经试验1curses最多能显示20多条数据，故此处写死，只显示前20;
-__FRESH_GAP__ = 2;    # 刷新频率
+__RUN_TIME__ = 30    # 默认运行200s
+__SHOW_LINES__ = 20   # 默认显示20行, 一屏幕究竟能打印多少条数据，跟分辨率，字体大小有关，其实也可以用scroll刷出滚动条来解决，
+					  # 但个人觉得没必要，若屏幕能多打印数据，请自行调整数量，或者自己增加代码刷滚动条。
+__FRESH_GAP__ = 3;    # 刷新频率
 __LOG__ = './ceph_osd_perf.log'   # 日志文件
 
 __HIGH_LATENCY_LINE__ = 20; # 超过20 ms就算高延时
@@ -273,6 +272,7 @@ if __name__ == "__main__":
     finally:
         # fh.close();
         close_curse(stdscr);
+
 
     # print last res
     if len(err) == 0:
